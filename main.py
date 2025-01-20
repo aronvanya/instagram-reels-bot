@@ -1,4 +1,5 @@
 import json
+import os
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -16,17 +17,24 @@ class TelegramWebhookHandler(BaseHTTPRequestHandler):
         user_name = data['message']['from']['first_name']
         text = data['message']['text']
 
-        # Отправляем ответ пользователю
-        url = f"https://api.telegram.org/bot<твой_токен>/sendMessage"  # Замените на свой токен
+        # Токен для Telegram API
+        TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+        # Ответ на сообщение
+        welcome_message = f"Привет, {user_name}! Ты отправил: {text}"
+
+        # URL для отправки ответа
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
         payload = {
             'chat_id': chat_id,
-            'text': f"Привет, {user_name}! Ты отправил: {text}"  # Ответ пользователю
+            'text': welcome_message
         }
 
-        # Отправка сообщения в Telegram
+        # Отправляем сообщение в Telegram
         requests.post(url, data=payload)
 
-        # Ответ на запрос от Telegram (всегда 200)
+        # Ответ на запрос от Telegram
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
