@@ -1,112 +1,79 @@
+import json
 import os
-import instaloader
-import cv2
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import requests
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Telegram настройки
-TELEGRAM_TOKEN = "7648873218:AAHgzpTF8jMosAsT2BFJPyfg9aU_sfaBD9Q"
+class TelegramWebhookHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        # Прочитать данные запроса
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length)
 
-# Инициализация Instaloader
-loader = instaloader.Instaloader()
+        # Логика обработки сообщений от Telegram
+        data = json.loads(post_data)
 
-# Глобальный словарь для хранения языка пользователя
-user_languages = {}
+        # Токен
+        TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+        
+        # Приветственные и ошибочные сообщения
+        greetings = {
+            "ru": "👋 Добро пожаловать! Отправьте ссылку на рилс из Instagram.",
+            "en": "👋 Welcome! Send a link to an Instagram reel.",
+            "vi": "👋 Chào mừng! Gửi liên kết đến một reel trên Instagram."
+        }
 
-# Функция для загрузки рилсов
-def download_reel(url):
-    try:
-        post = instaloader.Post.from_shortcode(loader.context, url.split("/")[-2])
-        loader.download_post(post, target="reels")
-        for file in os.listdir("reels"):
-            if file.endswith(".mp4"):
-                return os.path.join("reels", file)
-    except Exception as e:
-        print(f"Ошибка загрузки рилса: {e}")
-        return None
+        error_messages = {
+            "ru": "Не удалось загрузить видео. Проверьте ссылку.",
+            "en": "Failed to download the video. Please check the link.",
+            "vi": "Không thể tải video. Vui lòng kiểm tra liên kết."
+        }
 
-# Обработка сообщений с ссылками
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_type = update.effective_chat.type
-    user_id = update.effective_user.id
-    language = user_languages.get(user_id, "ru")  # По умолчанию русский
+        user_sent_text = {
+            "ru": "Видео отправлено пользователем: {user_name}",
+            "en": "Video sent by user: {user_name}",
+            "vi": "Video được gửi bởi người dùng: {user_name}"
+        }
 
-    loading_message_text = {
-        "ru": "Загружаю рилс, подождите...",
-        "en": "Downloading reel, please wait...",
-        "vi": "Đang tải video, vui lòng đợi..."
-    }.get(language, "Загружаю рилс, подождите...")
+        # Получение данных из запроса
+        chat_id = data['message']['chat']['id']
+        user_name = data['message']['from']['first_name']
+        text = data['message']['text'].strip()
 
-    error_message_text = {
-        "ru": "Не удалось загрузить видео. Проверьте ссылку.",
-        "en": "Failed to download the video. Please check the link.",
-        "vi": "Không thể tải video. Vui lòng kiểm tra liên kết."
-    }.get(language, "Не удалось загрузить видео. Проверьте ссылку.")
+        # Определение языка
+        language = "ru"  # по умолчанию русский
+        if "instagram.com/reel/" in text:
+            language = "en"  # можно добавить логику для автоматического определения языка
 
-    user_sent_text = {
-        "ru": "Видео отправлено пользователем: {user_name}",
-        "en": "Video sent by user: {user_name}",
-        "vi": "Video được gửi bởi người dùng: {user_name}"
-    }.get(language, "Видео отправлено пользователем: {user_name}")
+        # Приветствие пользователя
+        welcome_message = greetings.get(language, "👋 Добро пожаловать!")
+        
+        # Отправка приветственного сообщения
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {
+            'chat_id': chat_id,
+            'text': welcome_message
+        }
 
-    url = update.message.text.strip()
-    user_name = update.effective_user.first_name
+        requests.post(url, data=payload)
 
-    if "instagram.com/reel/" in url or "instagram.com/p/" in url:
-        loading_message = await update.message.reply_text(loading_message_text)
-        video_path = download_reel(url)
-    else:
-        return
+        # Обработка видео или ошибок
+        if "instagram.com/reel/" in text:
+            message = user_sent_text.get(language, "Видео отправлено пользователем: {user_name}")
+        else:
+            message = error_messages.get(language, "Не удалось загрузить видео. Проверьте ссылку.")
+        
+        # Ответ на сообщение
+        payload['text'] = message.format(user_name=user_name)
+        requests.post(url, data=payload)
 
-    if video_path:
-        try:
-            cap = cv2.VideoCapture(video_path)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            cap.release()
-
-            caption_text = user_sent_text.format(user_name=user_name)
-            await context.bot.send_video(
-                chat_id=update.effective_chat.id,
-                video=open(video_path, 'rb'),
-                width=width,
-                height=height,
-                supports_streaming=True,
-                caption=caption_text
-            )
-            await loading_message.delete()
-            os.remove(video_path)
-        except Exception as e:
-            print(f"Ошибка отправки видео: {e}")
-            if loading_message:
-                await loading_message.edit_text(error_message_text)
-    else:
-        if loading_message:
-            await loading_message.edit_text(error_message_text)
-
-# Команда /start
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "👋 Добро пожаловать! Отправьте ссылку на рилс из Instagram."
-    )
-
-# Основная функция
-def main():
-    if not os.path.exists("reels"):
-        os.makedirs("reels")
-
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # Обработчики
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & (filters.ChatType.GROUPS | filters.ChatType.PRIVATE), handle_message))
-
-    # Запуск вебхука
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8080)),
-        webhook_url=f"https://<ваш_домен>.railway.app/webhook"
-    )
+        # Ответ серверу Telegram
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "success"}).encode())
 
 if __name__ == "__main__":
-    main()
+    server_address = ('', 8080)  # Порт по умолчанию для Vercel
+    httpd = HTTPServer(server_address, TelegramWebhookHandler)
+    print("Server running...")
+    httpd.serve_forever()
